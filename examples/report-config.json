@@ -1,0 +1,12 @@
+{
+  "title": "合成示例：测试结果与实际输入输出",
+  "includeHandoff": true,
+  "includeDuration": true,
+  "groupBy": ["scene", "attributes.channel"],
+  "metrics": [
+    {"label": "重复输入及上下文的执行占比", "numerator": 2, "denominator": 4, "unit": "%", "definition": "分子为已完成执行中 input/context 存在重复的执行次数，分母为全部已完成执行次数。", "evidence": "本仓库五条合成数据中，第1、2条输入和上下文完全相同；第3条上下文不同；已完成共4条。"}
+  ],
+  "sections": [
+    {"title": "示例说明", "text": "本页全部为合成数据，仅用于演示。转人工未知样本未按未转人工处理；相同输入不同历史分别展示。", "columns": ["事项", "处理方式"], "rows": [["判定不一致", "保留通过和未通过次数"], ["未完成执行", "单独列出，不纳入通过率分母"]]}
+  ]
+}

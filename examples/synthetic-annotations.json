@@ -1,0 +1,7 @@
+{
+  "annotations": [
+    {"recordId": "example-run-1", "handoff": false, "handoffEvidence": "合成示例执行轨迹标记完整，动作仅有发送文本。", "attributes": {"channel": "示例网页"}},
+    {"recordId": "example-run-2", "handoff": false, "handoffEvidence": "合成示例执行轨迹标记完整，动作仅有发送文本。", "attributes": {"channel": "示例网页"}},
+    {"recordId": "example-run-4", "handoff": true, "handoffEvidence": "合成示例完整执行轨迹包含成功的 handover 动作。", "attributes": {"channel": "示例网页"}}
+  ]
+}

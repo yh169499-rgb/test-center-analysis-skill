@@ -1,0 +1,76 @@
+{
+  "code": 0,
+  "page": {"current": 1, "pageSize": 200, "total": 5},
+  "data": [
+    {
+      "testTaskItemId": "example-run-1",
+      "orgId": "example-org",
+      "testTaskId": "example-task",
+      "testCaseName": "示例查询第一轮",
+      "status": "success",
+      "passed": true,
+      "scenarioPath": "地址查询",
+      "triggerContent": {"content": {"text": "查询示例小区"}},
+      "sessionMemoryCustomData": {},
+      "durationMs": 1200,
+      "executionTraceComplete": true,
+      "executedActions": [{"type": "send-text-message", "status": "success"}],
+      "canvasActionOutputAssertionResult": [{"type": "send-text-message", "actualValue": "找到两个示例点位：\n1. 示例一\n2. 示例二", "expectedDescription": "列出示例一和示例二", "llmReason": "两个候选均已列出", "passed": true}]
+    },
+    {
+      "testTaskItemId": "example-run-2",
+      "orgId": "example-org",
+      "testTaskId": "example-task",
+      "testCaseName": "示例查询重复执行",
+      "status": "success",
+      "passed": false,
+      "scenarioPath": "地址查询",
+      "triggerContent": {"content": {"text": "查询示例小区"}},
+      "sessionMemoryCustomData": {},
+      "durationMs": 1500,
+      "executionTraceComplete": true,
+      "executedActions": [{"type": "send-text-message", "status": "success"}],
+      "canvasActionOutputAssertionResult": [{"type": "send-text-message", "actualValue": "找到两个示例点位：\n1. 示例一\n2. 示例二", "expectedDescription": "列出示例一、示例二、示例三", "llmReason": "缺少示例三", "passed": false}]
+    },
+    {
+      "testTaskItemId": "example-run-3",
+      "orgId": "example-org",
+      "testTaskId": "example-task",
+      "testCaseName": "示例查询含历史",
+      "status": "success",
+      "passed": true,
+      "scenarioPath": "地址查询",
+      "triggerContent": {"content": {"text": "查询示例小区"}},
+      "sessionMemoryCustomData": {"history-example": [{"role": "user", "content": "仅查看前两个点位"}]},
+      "durationMs": 900,
+      "canvasActionOutputAssertionResult": [{"type": "send-text-message", "actualValue": "找到两个示例点位：\n1. 示例一\n2. 示例二", "expectedDescription": "根据历史只返回前两个点位", "llmReason": "符合历史限制", "passed": true}]
+    },
+    {
+      "testTaskItemId": "example-run-4",
+      "orgId": "example-org",
+      "testTaskId": "example-task",
+      "testCaseName": "示例人工处理",
+      "status": "completed",
+      "passed": true,
+      "scenarioPath": "人工处理",
+      "triggerContent": {"content": {"text": "这个问题需要人工协助"}},
+      "sessionMemoryCustomData": {},
+      "durationMs": 2000,
+      "executionTraceComplete": true,
+      "executedActions": [{"type": "handover", "status": "success"}],
+      "canvasActionOutputAssertionResult": [{"type": "handover", "actualValue": {"transferred": true}, "expectedDescription": "执行转人工", "llmReason": "已完成转接动作", "passed": true}]
+    },
+    {
+      "testTaskItemId": "example-run-5",
+      "orgId": "example-org",
+      "testTaskId": "example-task",
+      "testCaseName": "示例排队执行",
+      "status": "pending",
+      "passed": null,
+      "scenarioPath": "其他",
+      "triggerContent": {"content": {"text": "尚未执行的示例"}},
+      "sessionMemoryCustomData": {},
+      "canvasActionOutputAssertionResult": []
+    }
+  ]
+}
