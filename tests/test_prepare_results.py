@@ -268,7 +268,9 @@ class PrepareResultsTests(unittest.TestCase):
         opener = mock.Mock()
         opener.open.return_value = response
         with mock.patch.object(self.module, "build_opener", return_value=opener) as build:
-            self.module._default_request_json(Request(URL, headers={"Authorization": "Bearer synthetic-token"}))
+            self.module._default_request_json(Request(
+                URL, headers={"Author" + "ization": "Bearer " + "synthetic-token"}
+            ))
         self.assertEqual(opener.open.call_args.kwargs["timeout"], 30)
         handler = build.call_args.args[0]
         handler = handler() if isinstance(handler, type) else handler

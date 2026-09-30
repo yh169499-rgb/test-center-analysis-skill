@@ -29,6 +29,38 @@
 
 `id` 是稳定的执行记录标识，不是输入文本、案例名或排序序号。`originalPassed`、`completed` 和 `handoff` 都是 true / false / null；null 表示未知，不得当 false。`input`、`actual`、`context` 可为 JSON 值，字符串必须保留原文。多轮上下文、非文本输入、多动作输出均不能只取第一项。`assertions` 保留完整原始断言对象，允许 API 附加字段；报告仅展示已知的实际值、期待、原因、类型和判定，不公开其他原始元数据。原始完整 API 响应另存以便追溯，不渲染整个原始对象到公开报告。
 
+## `md test results` 单任务映射
+
+`scripts/prepare_md_results.py` 只接受一个任务的 `--deep --out ...jsonl` 结果，产出同一个 `schemaVersion = 1` 契约。`source` 明确记录单任务范围和数据局限：
+
+```json
+{
+  "schemaVersion": 1,
+  "source": {
+    "complete": true,
+    "scope": "task",
+    "scopeVerified": true,
+    "total": 1,
+    "warnings": ["JSONL 不含完整多轮上下文；context 保持空对象。"]
+  },
+  "records": []
+}
+```
+
+关键映射：
+
+- `task` + `testExecId` → `id`：非空 `testExecId` 优先；缺失时使用 `task + caseId + 同任务稳定序号` 组成 `md:<task>:<caseId>:<ordinal>` fallback。`caseId` 也为空时拒绝记录；生成后检查全部 `id` 唯一，不允许重复执行标识。
+- `name` → `caseName`，空字符串转为 null；`user` → `input`，保留原文。
+- `reply` 与 `actions` 一起组成 `actual = {"reply": ..., "actions": ...}`，即使其中一项为空也保留原值。
+- `expect` / `verdict` / `reply` / `actions` / `passed` 生成单个 `assertions` 项：`type = "miaodong-test-result"`，`actualValue` 是上述 `actual`，`expectedDescription` 来自 `expect`，`llmReason` 来自 `verdict`，`passed` 在正常执行时来自源 `passed`。
+- 源 `passed` → `originalPassed`，仅在正常执行时保留布尔值。`noop = true` 或 `notRun = true` 时，`originalPassed` 和断言 `passed` 都是 null，表示不纳入业务判定，不得当成 false。
+- JSONL 不提供完整多轮上下文，因此每条 `context = {}`，并在 `source.warnings` 披露；不把空对象说成“无上下文”。
+- 正常执行的 `status = "completed"` 且 `completed = true`；`noop = true` 映射为 `status = "noop"` 且 `completed = true`；`notRun = true` 映射为 `status = "not_run"` 且 `completed = false`。
+- `scenario` → `scene`，`ms` → `durationMs`。`task`、`caseId`、`execId`、`testExecId`、`online` 和 `cost` 放入 `attributes`，仅作私有追溯，默认不渲染到公开报告。
+- `handoff = null` 且 `handoffEvidence = null`。扁平的回复与动作摘要不足以证明真实转接；只能通过已核验的完整轨迹补充。
+
+`raw-md-results.jsonl` 和规范化后的 `dataset.json` 均是私有追溯文件，不属于可发布内容。
+
 ## 判定调整（独立文件）
 
 ```json
@@ -62,8 +94,8 @@
 
 ## 默认统计口径
 
-- 分母：`completed is true` 且报告判定为布尔值的执行数；通过数除以该分母。总执行数、可判定数、未完成数、完成状态未知数、判定缺失数、异常状态数另列。零分母显示“不适用”，不是 0%。
+- 业务通过率分母：`completed is true`、不是 `noop` / `not_run` / 错误或未知状态，且报告判定为布尔值的正常执行数；通过数除以该分母。总记录、空跑、未跑、状态未知、判定缺失和异常状态另列。零分母显示“不适用”，不是 0%。
 - 去重键：精确的 `(input, context)`；其下精确 `actual` 合并，保留通过／未通过／未纳入统计次数。同文异判不强制合成单一结论。
-- 转人工率：已完成且 `handoff` 明确的执行为分母，true 为分子，同时列出已完成执行中未知数量和识别覆盖率；一个执行多次转接只计一次。任何转人工结果都不直接改变通过率。
-- 耗时只纳入已完成、单位已确认、非负的 `durationMs`，报告有效样本数及缺失数；不得猜测 API 单位。
+- 转人工率：正常完成且 `handoff` 明确的执行为分母，true 为分子，同时列出正常完成执行中未知数量和识别覆盖率；一个执行多次转接只计一次。该口径不要求业务判定已知，任何转人工结果都不直接改变通过率。
+- 耗时只纳入正常完成、单位已确认、非负且有限的 `durationMs`，报告有效样本数及缺失数；该口径不要求业务判定已知，不得猜测 API 单位。
 - 分组统计不跨批次自动对齐；版本对比需要明确匹配键、相同统计口径和另一批数据。

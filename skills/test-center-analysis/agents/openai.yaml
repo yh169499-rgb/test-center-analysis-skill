@@ -1,4 +1,4 @@
 interface:
   display_name: "测试结果分析与报告"
-  short_description: "检查测试误判，按需统计通过率、转人工等指标，生成完整输入输出报告"
-  default_prompt: "使用 $test-center-analysis 检查未通过案例或生成测试报告；如需发布，在校验完成后先确认给客户还是同事看。"
+  short_description: "运行或接管秒懂测试任务，检查误判并生成可追溯报告"
+  default_prompt: "使用 $test-center-analysis 运行或接管我指定的秒懂测试任务，核验结果并生成本地报告；只有我明确要求时才准备发布。"

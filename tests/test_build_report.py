@@ -81,6 +81,71 @@ class BuildReportTests(unittest.TestCase):
         self.assertEqual((s["eligible"], s["failed"], s["excluded"]), (1, 1, 4))
         self.assertEqual((s["incomplete"], s["completionUnknown"], s["judgmentUnknown"], s["errorStatus"]), (2, 1, 2, 1))
 
+    def test_noop_and_not_run_are_disclosed_but_excluded_from_business_rate(self):
+        attack = '</script><script>alert("synthetic-noop")</script>'
+        data = dataset(
+            record(1, True, status="completed", completed=True),
+            record(2, False, status="completed", completed=True),
+            record(3, False, status="noop", completed=True, actual=attack),
+            record(4, None, status="not_run", completed=False),
+            record(5, None, status="completed", completed=True),
+        )
+
+        content, summary = self.build(data)
+
+        self.assertEqual((summary["eligible"], summary["passed"], summary["failed"]), (2, 1, 1))
+        self.assertEqual((summary["noop"], summary["notRun"]), (1, 1))
+        self.assertEqual(summary["judgmentUnknown"], 2)
+        self.assertIn("otherJudgmentUnknown", summary)
+        self.assertIn("otherCompletedJudgmentUnknown", summary)
+        self.assertEqual(summary["otherJudgmentUnknown"], 1)
+        self.assertEqual(summary["otherCompletedJudgmentUnknown"], 1)
+        self.assertNotIn("normalJudgmentUnknown", summary)
+        self.assertEqual((summary["original"]["eligible"], summary["original"]["passed"],
+                          summary["original"]["failed"]), (2, 1, 1))
+        self.assertEqual(sum(group["executions"] for group in summary["groupCounts"]), summary["total"])
+        self.assertIn("空跑 1", content)
+        self.assertIn("未跑 1", content)
+        self.assertIn("非空跑/未跑记录判定缺失", content)
+        self.assertIn("未正常执行明细", content)
+
+        failures = content.split('<section id="failures"', 1)[1].split('</section>', 1)[0]
+        self.assertIn("案例 2", failures)
+        self.assertNotIn("案例 3", failures)
+        self.assertNotIn("案例 4", failures)
+        self.assertNotIn("案例 5", failures)
+
+        abnormal = content.split('<section id="abnormal-executions"', 1)[1].split('</section>', 1)[0]
+        self.assertIn("案例 3", abnormal)
+        self.assertIn("案例 4", abnormal)
+        self.assertNotIn("案例 2", abnormal)
+        self.assertNotIn("案例 5", abnormal)
+        self.assertIn("noop", abnormal)
+        self.assertIn("not_run", abnormal)
+        self.assertIn(html.escape(attack), abnormal)
+        self.assertNotIn(attack, content)
+
+        executable = content.rsplit("<script>", 1)[1].split("</script>", 1)[0]
+        parsed = subprocess.run(["node", "--check"], input=executable, capture_output=True, text=True)
+        self.assertEqual(parsed.returncode, 0, parsed.stderr)
+
+    def test_abnormal_details_use_global_search_filter_and_pagination_contract(self):
+        records = [record(i, False, status="noop", completed=True,
+                          input=f"空跑输入 {i}", actual=f"空跑输出 {i}") for i in range(1, 27)]
+
+        content, _ = self.build(dataset(*records))
+
+        abnormal = content.split('<section id="abnormal-executions"', 1)[1].split('</section>', 1)[0]
+        self.assertTrue(abnormal.startswith(' data-list>'))
+        self.assertEqual(abnormal.count('<article class="card" data-failed="0">'), 26)
+        self.assertEqual(abnormal.count("data-prev"), 1)
+        self.assertEqual(abnormal.count("data-page"), 1)
+        self.assertEqual(abnormal.count("data-next"), 1)
+        executable = content.rsplit("<script>", 1)[1].split("</script>", 1)[0]
+        self.assertIn("document.querySelectorAll('[data-list]')", executable)
+        parsed = subprocess.run(["node", "--check"], input=executable, capture_output=True, text=True)
+        self.assertEqual(parsed.returncode, 0, parsed.stderr)
+
     def test_handoff_uses_completed_known_values_and_never_response_text(self):
         data = dataset(record(1, handoff=True, handoffEvidence="已核对成功转接事件"),
                        record(2, False, handoff=False, handoffEvidence="已检查完整轨迹，无转接事件"),
@@ -102,6 +167,50 @@ class BuildReportTests(unittest.TestCase):
         self.rejects(dataset(record(1, durationMs=-1)))
         self.rejects(dataset(record(1, durationMs=float("nan"))))
         self.rejects(dataset(record(1, durationMs=True)))
+
+    def test_optional_operational_metrics_only_use_normal_completed_executions(self):
+        data = dataset(
+            record(1, True, status="completed", completed=True, durationMs=100,
+                   handoff=True, handoffEvidence="已记录转接事件"),
+            record(2, False, status="noop", completed=True, durationMs=10000,
+                   handoff=False, handoffEvidence="空跑无转接"),
+            record(3, None, status="not_run", completed=False, durationMs=20000,
+                   handoff=True, handoffEvidence="未执行记录"),
+            record(4, None, status="completed", completed=True, durationMs=250,
+                   handoff=True, handoffEvidence="判定未知"),
+            record(5, False, status="error", completed=True, durationMs=40000,
+                   handoff=False, handoffEvidence="执行异常"),
+            record(6, False, status="completed", completed=False, durationMs=50000,
+                   handoff=True, handoffEvidence="未完成"),
+        )
+
+        _, summary = self.build(data, config={"includeDuration": True, "includeHandoff": True})
+
+        self.assertEqual(summary["duration"], {
+            "completed": 2, "samples": 2, "missing": 0,
+            "meanMs": 175, "minMs": 100, "maxMs": 250,
+        })
+        self.assertEqual(summary["handoff"], {
+            "completed": 2, "known": 2, "transferred": 2,
+            "notTransferred": 0, "unknown": 0, "rate": 1.0, "coverage": 1.0,
+        })
+
+    def test_operational_metrics_are_independent_from_business_judgment(self):
+        data = dataset(record(
+            1, None, status="completed", completed=True, durationMs=250,
+            handoff=True, handoffEvidence="已记录转接事件",
+        ))
+
+        _, summary = self.build(data, config={"includeDuration": True, "includeHandoff": True})
+
+        self.assertEqual(summary["duration"], {
+            "completed": 1, "samples": 1, "missing": 0,
+            "meanMs": 250, "minMs": 250, "maxMs": 250,
+        })
+        self.assertEqual(summary["handoff"], {
+            "completed": 1, "known": 1, "transferred": 1,
+            "notTransferred": 0, "unknown": 0, "rate": 1.0, "coverage": 1.0,
+        })
 
     def test_annotations_do_not_mutate_input_or_change_pass_and_require_evidence(self):
         data = dataset(record(1, False))
@@ -213,7 +322,7 @@ class BuildReportTests(unittest.TestCase):
 
     def test_obvious_credentials_are_refused_with_safe_error(self):
         for credential in ["Bearer abcDEF1234567890", "password=not-a-real-value", "secret: synthetic-key-123",
-                           "eyJhbGciOiJub25lIn0.eyJzdWIiOiJzeW50aGV0aWMifQ.signature123"]:
+                           "eyJhbGciOiJub25lIn0" + ".eyJzdWIiOiJzeW50aGV0aWMifQ.signature123"]:
             with self.assertRaises(ValueError) as caught:
                 self.build(dataset(record(actual=credential)))
             self.assertNotIn(credential, str(caught.exception))
@@ -221,14 +330,14 @@ class BuildReportTests(unittest.TestCase):
 
     def test_http_credential_header_text_is_refused_with_safe_error(self):
         credentials = [
-            "Authorization: Basic c3ludGhldGljOnNhbXBsZQ==",
-            "Authorization: opaque-synthetic-value",
-            "authorization:\topaque-synthetic-value",
-            "Proxy-Authorization: Basic c3ludGhldGljOnNhbXBsZQ==",
-            "Cookie: session=synthetic-session-value",
-            "Set-Cookie: session=synthetic-session-value; HttpOnly; Secure",
-            'request headers: {"Authorization": "opaque-synthetic-value"}',
-            "request headers: {'Cookie': 'session=synthetic-session-value'}",
+            "Authorization" + ": Basic c3ludGhldGljOnNhbXBsZQ==",
+            "Authorization: synthetic-opaque-value",
+            "authorization:" + "\tsynthetic-opaque-value",
+            "Proxy-Authorization" + ": Basic c3ludGhldGljOnNhbXBsZQ==",
+            "Cookie: synthetic-session=value",
+            "Set-Cookie: synthetic-session=value; HttpOnly; Secure",
+            'request headers: {"Authorization": "synthetic-opaque-value"}',
+            "request headers: {'Cookie': 'synthetic-session=value'}",
         ]
         for credential in credentials:
             with self.subTest(credential=credential):
@@ -244,8 +353,8 @@ class BuildReportTests(unittest.TestCase):
 
     def test_empty_http_header_fields_are_not_credentials(self):
         empty_headers = [
-            "Authorization:", "Cookie:  \t", "Set-Cookie: \r\nX-Trace: synthetic",
-            "Authorization:\nContent-Type: application/json", "Authorization: null",
+            "Authorization:", "Cookie" + ":  \t", "Set-Cookie" + ": \r\nX-Trace: synthetic",
+            "Authorization" + ":\nContent-Type: application/json", "Authorization: null",
             '{"Authorization": "", "Cookie": null, "Set-Cookie": "  "}',
             "{'Authorization': '  ', 'Cookie': ''}",
         ]

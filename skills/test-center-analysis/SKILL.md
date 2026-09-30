@@ -1,11 +1,11 @@
 ---
 name: test-center-analysis
-description: Use when analyzing 秒懂/JZ Insight/Agent Test Lab test-task results for genuine failures versus false-negative judgments, or producing a customizable test report with pass rate, failed cases, deduplicated actual input/output, handoff rate, scene breakdowns, or other evidence-backed metrics. Triggers include 检查未通过是否误判、测试报告、转人工率、实际输入输出明细. Not for creating test cases, rerunning tests, or changing backend verdicts.
+description: Use when running or taking over a 秒懂/JZ Insight/Agent Test Lab test task and producing a report, analyzing failures versus false-negative judgments, or reporting pass rate, failed cases, deduplicated actual input/output, handoff, scenes, or other evidence-backed metrics. Triggers include 测试后出报告、已有 task 出报告、检查未通过是否误判、测试报告、转人工率、实际输入输出明细. Not for creating or editing test cases, or changing backend verdicts.
 ---
 
 # 测试结果分析与报告
 
-从已执行的测试任务生成可追溯的分析或 HTML 报告。先完成数据和内容核验；如果用户要求发布，**最后询问给客户还是同事看，明确确认后才发布**。
+运行或接手秒懂测试任务，或从已有完整数据生成可追溯的分析与 HTML 报告。先完成数据和内容核验；如果用户要求发布，**最后询问给客户还是同事看，明确确认后才发布**。不创建或编辑测试用例，不回写后台判定。
 
 ## 1. 确定模式和所需资料
 
@@ -15,13 +15,18 @@ description: Use when analyzing 秒懂/JZ Insight/Agent Test Lab test-task resul
 - **生成报告**：整理通过率、未通过具体案例和全部去重实际输入输出；用户可增加指标、分组和分析章节。默认按原判定，不自动把所有失败再判一遍。
 - **组合**：先检查未通过，再根据已确认的精确执行调整生成报告。
 
-优先复用当前任务已提供的资料，只询问缺失部分。接受：①完整 Request URL + Authorization；②完整本地 JSON 导出。URL 已有 orgId/testTaskId 时不再问用户要 ID。
+优先复用当前任务已提供的资料，只询问缺失部分。按来源选路径：
+
+- **智能体 + 测试集**：读 [秒懂测试任务流程](references/miaodong-workflow.md)，从 `md test run` 的跑前检查和费用预估开始，跑完后生成报告。
+- **智能体 + 任务**：读同一流程，从已有 task 的状态检查开始，不重新执行。
+- **完整 Request URL + Authorization** 或 **完整本地 JSON 导出**：继续使用下文的 `scripts/prepare_results.py`。URL 已有 orgId/testTaskId 时不再问用户要 ID。
+- **只有截图**：仅按可见证据做局部分析，保留下面的边界。
 
 若用户只想检查截图中某几条案例，可先按可见证据作局部分析并说明缺失信息，不必先索取凭证；截图不足以生成全任务通过率或宣称覆盖全部案例。只有完成用户要求确实需要完整数据时，才引导补齐接口或导出。
 
 **缺资料时必须告诉用户怎么获取**：使用 [取数指引](references/intake.md)，按“结果页 → 右键/Control 点击 → 检查 → Network → Command+R → 对应 list → Request URL 与 Authorization”引导。不要让用户提供 Cookie，不索取整个 HAR，不保存用户带凭证的原始截图为技能示例。
 
-## 2. 全量读取与保留证据
+## 2. 全量读取与保留证据（API / 本地 JSON 路径）
 
 先读 [数据契约](references/data-contract.md)，然后使用 `scripts/prepare_results.py`。示例命令路径相对于本技能目录；实际调用应解析为安装位置的绝对路径。
 

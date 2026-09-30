@@ -20,7 +20,12 @@ RECORD_KEYS = {
     "status", "completed", "scene", "handoff", "handoffEvidence", "durationMs", "attributes",
 }
 ERROR_STATUSES = {"error", "errored", "failed", "failure", "exception", "timeout", "timed_out", "cancelled", "canceled", "aborted"}
-SECRET_KEYS = {"password", "passwd", "secret", "clientsecret", "apikey", "accesstoken", "refreshtoken", "authorization", "proxyauthorization", "cookie", "setcookie", "token"}
+SECRET_KEYS = {
+    "password", "passwd", "secret", "clientsecret", "apikey", "xapikey",
+    "authtoken", "xauthtoken", "accesstoken", "refreshtoken", "accesskey",
+    "secretkey", "authorization", "proxyauthorization", "cookie", "setcookie",
+    "token",
+}
 SECRET_PATTERNS = (
     re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{8,}", re.I),
     re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
@@ -59,20 +64,34 @@ def _nullable_bool(value, label):
 
 
 def _number(value, label):
-    if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+    if type(value) is int:
+        valid = value >= 0
+    else:
+        valid = type(value) is float and math.isfinite(value) and value >= 0
+    if not valid:
         _fail(label + "必须是非负有限数。")
 
 
 def _has_secret_value(value):
-    if value is None:
-        return False
-    if isinstance(value, str):
-        return bool(value.strip())
-    if isinstance(value, dict):
-        return any(_has_secret_value(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_has_secret_value(item) for item in value)
-    return True
+    pending = [value]
+    seen = set()
+    while pending:
+        item = pending.pop()
+        if item is None:
+            continue
+        if isinstance(item, str):
+            if item.strip():
+                return True
+            continue
+        if isinstance(item, (dict, list)):
+            identity = id(item)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            pending.extend(item.values() if isinstance(item, dict) else item)
+            continue
+        return True
+    return False
 
 
 def _has_http_credentials(value):
@@ -87,32 +106,50 @@ def _has_http_credentials(value):
     return False
 
 
-def _safe_json(value):
+def _normalize_credential_key(value):
+    return re.sub(r"[^a-z0-9]", "", value.lower())
+
+
+def validate_no_credentials(value):
     """Fail closed on obvious credentials without echoing their contents."""
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if not isinstance(key, str):
-                _fail("JSON 对象的键必须是文本。")
-            normalized = re.sub(r"[^a-z0-9]", "", key.lower())
-            if normalized in SECRET_KEYS and _has_secret_value(item):
+    pending = [value]
+    seen = set()
+    while pending:
+        item = pending.pop()
+        if isinstance(item, dict):
+            identity = id(item)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            for key, nested in item.items():
+                if not isinstance(key, str):
+                    _fail("JSON 对象的键必须是文本。")
+                normalized = _normalize_credential_key(key)
+                if normalized in SECRET_KEYS and _has_secret_value(nested):
+                    _fail("检测到疑似凭据，已停止生成报告；请在受控源数据中核实后重试。")
+                pending.extend((key, nested))
+        elif isinstance(item, list):
+            identity = id(item)
+            if identity not in seen:
+                seen.add(identity)
+                pending.extend(item)
+        elif isinstance(item, str):
+            try:
+                item.encode("utf-8")
+            except UnicodeError:
+                _fail("JSON 文本包含无法编码为 UTF-8 的字符，未生成报告。")
+            if _has_http_credentials(item) or any(pattern.search(item) for pattern in SECRET_PATTERNS):
                 _fail("检测到疑似凭据，已停止生成报告；请在受控源数据中核实后重试。")
-            _safe_json(key)
-            _safe_json(item)
-    elif isinstance(value, list):
-        for item in value:
-            _safe_json(item)
-    elif isinstance(value, str):
-        try:
-            value.encode("utf-8")
-        except UnicodeError:
-            _fail("JSON 文本包含无法编码为 UTF-8 的字符，未生成报告。")
-        if _has_http_credentials(value) or any(pattern.search(value) for pattern in SECRET_PATTERNS):
-            _fail("检测到疑似凭据，已停止生成报告；请在受控源数据中核实后重试。")
-    elif type(value) is float:
-        if not math.isfinite(value):
-            _fail("JSON 数据包含非有限数。")
-    elif value is not None and type(value) not in (int, bool):
-        _fail("包含不支持的 JSON 值。")
+        elif type(item) is float:
+            if not math.isfinite(item):
+                _fail("JSON 数据包含非有限数。")
+        elif item is not None and type(item) not in (int, bool):
+            _fail("包含不支持的 JSON 值。")
+
+
+# Keep the former private entry point available for local callers while the
+# public validator name is adopted.
+_safe_json = validate_no_credentials
 
 
 def _evidence_fields(record):
@@ -269,17 +306,36 @@ def _ratio(numerator, denominator):
     return numerator / denominator if denominator else None
 
 
+def _execution_status(record):
+    return (record["status"] or "").strip().lower()
+
+
+def _is_abnormal_execution(record):
+    return _execution_status(record) in {"noop", "not_run"}
+
+
+def _is_normal_completed(record):
+    status = _execution_status(record)
+    return record["completed"] is True and status not in ERROR_STATUSES | {"noop", "not_run", "unknown"}
+
+
 def _stats(records, judgment="reportPassed"):
-    eligible = [r for r in records if r["completed"] is True and type(r[judgment]) is bool]
+    eligible = [r for r in records
+                if not _is_abnormal_execution(r) and r["completed"] is True and type(r[judgment]) is bool]
     passed = sum(r[judgment] is True for r in eligible)
     return {
         "total": len(records), "completed": sum(r["completed"] is True for r in records),
         "eligible": len(eligible), "passed": passed, "failed": len(eligible) - passed,
         "rate": _ratio(passed, len(eligible)), "excluded": len(records) - len(eligible),
+        "noop": sum(_execution_status(r) == "noop" for r in records),
+        "notRun": sum(_execution_status(r) == "not_run" for r in records),
         "incomplete": sum(r["completed"] is False for r in records),
         "completionUnknown": sum(r["completed"] is None for r in records),
         "judgmentUnknown": sum(r[judgment] is None for r in records),
         "completedJudgmentUnknown": sum(r["completed"] is True and r[judgment] is None for r in records),
+        "otherJudgmentUnknown": sum(not _is_abnormal_execution(r) and r[judgment] is None for r in records),
+        "otherCompletedJudgmentUnknown": sum(not _is_abnormal_execution(r) and r["completed"] is True
+                                             and r[judgment] is None for r in records),
         "errorStatus": sum((r["status"] or "").strip().lower() in ERROR_STATUSES for r in records),
     }
 
@@ -295,7 +351,7 @@ def _exact(value):
 
 
 def _outcome(record):
-    if record["completed"] is not True or type(record["reportPassed"]) is not bool:
+    if _is_abnormal_execution(record) or record["completed"] is not True or type(record["reportPassed"]) is not bool:
         return "excluded"
     return "passed" if record["reportPassed"] else "failed"
 
@@ -405,11 +461,15 @@ def _render(records, groups, summary, config, source):
     parts.append('<div class="toolbar controls"><label for="search">搜索原文</label><input id="search" type="search" placeholder="输入、上下文、输出、期待或原因"><label><input id="failed-only" type="checkbox">只看未通过</label><label>每页 <select id="page-size"><option>10</option><option>25</option><option>50</option></select> 项</label><button id="print" type="button">打印 / 保存 PDF</button></div>')
     parts.append('<section id="overview"><h2>结果总览</h2><div class="metrics">')
     for label, value in (("总执行数", summary["total"]), ("可判定数（通过率分母）", summary["eligible"]), ("通过", summary["passed"]),
-                         ("未通过", summary["failed"]), ("通过率", _percent(summary["rate"])), ("未完成", summary["incomplete"]),
-                         ("完成状态未知", summary["completionUnknown"]), ("判定缺失（全部执行）", summary["judgmentUnknown"]), ("异常状态", summary["errorStatus"])):
+                         ("未通过", summary["failed"]), ("通过率", _percent(summary["rate"])), ("空跑", summary["noop"]),
+                         ("未执行（未跑）", summary["notRun"]), ("未完成", summary["incomplete"]),
+                         ("完成状态未知", summary["completionUnknown"]),
+                         ("非空跑/未跑记录判定缺失", summary["otherJudgmentUnknown"]),
+                         ("异常状态", summary["errorStatus"])):
         parts.append('<div class="metric"><span>' + _escape(label) + '</span><strong>' + _escape(value) + '</strong></div>')
-    parts.append('</div><p class="note">通过率 = 通过数 ÷ 可判定数。仅 completed = true 且报告判定为 true / false 的执行纳入分母。未知判定、未完成与完成状态未知均不计为失败；分母为零时显示“不适用”。</p>')
-    parts.append('<p class="note">已完成 ' + str(summary["completed"]) + ' 次，其中已完成但判定缺失 ' + str(summary["completedJudgmentUnknown"]) + ' 次；未纳入通过率统计共 ' + str(summary["excluded"]) + ' 次。判定缺失与完成状态指标可能重叠。</p>')
+    parts.append('</div><p class="note">通过率 = 通过数 ÷ 可判定数。仅正常执行、completed = true 且报告判定为 true / false 的记录纳入分母。空跑、未跑、未知判定、未完成与完成状态未知均不计为失败；分母为零时显示“不适用”。</p>')
+    parts.append('<p class="note">未正常执行：空跑 ' + str(summary["noop"]) + ' 次 · 未跑 ' + str(summary["notRun"]) + ' 次。两者单独披露，不进入业务通过率或未通过案例。</p>')
+    parts.append('<p class="note">已完成 ' + str(summary["completed"]) + ' 次，其中非空跑/未跑且已完成但判定缺失 ' + str(summary["otherCompletedJudgmentUnknown"]) + ' 次；未纳入通过率统计共 ' + str(summary["excluded"]) + ' 次。该判定缺失指标与完成状态指标可能重叠。</p>')
     parts.append('<p class="note">异常状态单独计数：error、errored、failed、failure、exception、timeout、timed_out、cancelled、canceled、aborted（忽略大小写及首尾空格）。异常标记本身不改变分母规则。</p>')
     if summary["adjustmentCount"]:
         original = summary["original"]
@@ -417,14 +477,14 @@ def _render(records, groups, summary, config, source):
     parts.append('</section>')
     if "handoff" in summary:
         handoff = summary["handoff"]
-        parts.append('<section id="handoff"><h2>转人工情况</h2>' + _table(["已完成", "已知转接结果（分母）", "已转人工", "未转人工", "未知", "转人工率", "识别覆盖率"],
+        parts.append('<section id="handoff"><h2>转人工情况</h2>' + _table(["正常完成", "已知转接结果（分母）", "已转人工", "未转人工", "未知", "转人工率", "识别覆盖率"],
                      [[handoff["completed"], handoff["known"], handoff["transferred"], handoff["notTransferred"], handoff["unknown"], _percent(handoff["rate"]), _percent(handoff["coverage"])]]) +
-                     '<p class="note">转人工率 = 已完成且明确已转人工的执行数 ÷ 已完成且转接结果已知的执行数；识别覆盖率 = 已知数 ÷ 已完成数。一个执行多次转接只计一次。仅依据结构化证据或完整轨迹补充，回复中出现“为您转人工”不视为发生转接。转人工不改变通过率。</p></section>')
+                     '<p class="note">转人工率 = 正常完成且明确已转人工的执行数 ÷ 正常完成且转接结果已知的执行数；识别覆盖率 = 已知数 ÷ 正常完成数。空跑、未跑、status = unknown、错误状态和未完成记录不进入口径；业务判定是否已知不影响该口径。一个执行多次转接只计一次。仅依据结构化证据或完整轨迹补充，回复中出现“为您转人工”不视为发生转接。转人工不改变通过率。</p></section>')
     if "duration" in summary:
         duration = summary["duration"]
         parts.append('<section id="duration"><h2>执行耗时</h2>' + _table(["有效样本", "缺失", "平均（毫秒）", "最短（毫秒）", "最长（毫秒）"],
                      [[duration["samples"], duration["missing"], *["不适用" if duration[k] is None else duration[k] for k in ("meanMs", "minMs", "maxMs")]]]) +
-                     '<p class="note">仅纳入已完成执行中单位已确认为毫秒、非负且有限的 durationMs。缺失数以已完成执行为范围；不推断其他单位。</p></section>')
+                     '<p class="note">仅纳入正常完成执行中，单位已确认为毫秒、非负且有限的 durationMs。空跑、未跑、status = unknown、错误状态和未完成记录不进入口径；业务判定是否已知不影响该口径，不推断其他耗时单位。</p></section>')
     for breakdown in summary.get("groupBreakdowns", []):
         rows = [["（字段缺失）" if v["missing"] else _display(v["value"]), v["total"], v["eligible"], v["passed"], v["failed"], _percent(v["rate"])] for v in breakdown["values"]]
         parts.append('<section><h2>分组统计：' + _escape(breakdown["field"]) + '</h2>' + _table(["分组值", "执行数", "可判定数", "通过", "未通过", "通过率"], rows) + '<p class="note">按字段的完整 JSON 值精确分组，缺失字段单列；不进行跨批次匹配。</p></section>')
@@ -440,6 +500,22 @@ def _render(records, groups, summary, config, source):
         if "columns" in section:
             parts.append(_table(section["columns"], section["rows"]))
         parts.append('</section>')
+    abnormal = [r for r in records if _is_abnormal_execution(r)]
+    parts.append('<section id="abnormal-executions" data-list><h2>未正常执行明细 · ' + str(len(abnormal)) + ' 次执行</h2><p class="note">以下仅列出 status 为 noop 或 not_run 的事实记录；它们不作为业务失败。</p>')
+    for index, record in enumerate(abnormal, 1):
+        parts.append('<article class="card" data-failed="0"><h3>记录 ' + str(index) + ' · ' + _escape(record.get("caseName") or "未命名案例") + '</h3>')
+        parts.append(_pre("执行状态", _execution_status(record)))
+        for label, key in (("实际输入", "input"), ("执行上下文", "context"), ("实际输出", "actual")):
+            parts.append(_pre(label, record[key]))
+        for number, assertion in enumerate(record["assertions"], 1):
+            parts.append('<div class="variant"><h4>记录信息 ' + str(number) + '</h4>')
+            for label, key in (("对应期待", "expectedDescription"), ("记录原因", "llmReason")):
+                parts.append(_pre(label, assertion.get(key)))
+            parts.append('</div>')
+        parts.append('</article>')
+    if not abnormal:
+        parts.append('<p class="empty">本批次没有空跑或未跑记录。</p>')
+    parts.append(_pager() + '</section>')
     failures = [r for r in records if _outcome(r) == "failed"]
     parts.append('<section id="failures" data-list><h2>未通过案例 · ' + str(len(failures)) + ' 次执行</h2><p class="note">以下逐次列出报告判定未通过的完整案例；每条期待、断言实际值及判定原因保留对应关系。</p>')
     for index, record in enumerate(failures, 1):
@@ -487,7 +563,7 @@ def build_report(dataset, adjustments=None, annotations=None, config=None):
     """Return (HTML, sanitized summary) without mutating any caller-owned value."""
     config = {} if config is None else config
     for value in (dataset, adjustments, annotations, config):
-        _safe_json(value)
+        validate_no_credentials(value)
     _validate_dataset(dataset)
     _validate_config(config)
     records = copy.deepcopy(dataset["records"])
@@ -497,7 +573,7 @@ def build_report(dataset, adjustments=None, annotations=None, config=None):
                "original": _stats(records, "originalPassed"), "adjustmentCount": sum("adjustment" in r for r in records),
                "groups": len(groups), "variants": sum(len(g["variants"]) for g in groups),
                "groupCounts": [{**_count(g["records"]), "variantCounts": [_count(v["records"]) for v in g["variants"].values()]} for g in groups]}
-    completed = [r for r in records if r["completed"] is True]
+    completed = [r for r in records if _is_normal_completed(r)]
     if config.get("includeHandoff"):
         known = [r for r in completed if type(r.get("handoff")) is bool]
         transferred = sum(r["handoff"] is True for r in known)
